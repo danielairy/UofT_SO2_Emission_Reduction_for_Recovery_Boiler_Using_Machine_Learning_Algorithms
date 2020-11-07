@@ -1,0 +1,319 @@
+---
+title: "Root cause analysis of High Sulfur Dioxide Emission in a Recovery boiler in a Pulp and Paper Plant "
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+# read in the first worksheet from the workbook myexcel.xlsx
+# first row contains variable names
+library(readxl)
+Train <- read_excel("07. Train.xlsx")
+Test <- read_excel("06. Test.xlsx")
+## Plot histogram
+hist(Train$`SO2 1 HR AVG`, main="Histogram of SO2 1 HR AVG", xlab = "SO2 1 HR Avg Emission")
+boxplot(Train$`SO2 1 HR AVG`, main= "SO2 1 HR AVG", xlab = "SO2 1 HR Avg Emission" )
+summary(Train)
+```
+
+# Scatter Plot
+```{r}
+rbPal<-colorRampPalette(c('gray','red'))
+
+SO2Col<-rbPal(10)[as.numeric(cut(Train$`SO2 1 HR AVG`,breaks = 10))]
+
+plot(Train$`Primary Air Flow`,Train$`SO2 1 HR AVG`,col=SO2Col) #maybe
+plot(Train$`Secondary Air Flow`,Train$`SO2 1 HR AVG`)
+plot(Train$`Tertiary Air Flow`,Train$`SO2 1 HR AVG`)
+plot(Train$`PRIMARY WINDBOX P`,Train$`SO2 1 HR AVG`)
+plot(Train$`SECONDARY WINDBOX P`,Train$`SO2 1 HR AVG`)
+plot(Train$`TERTIARY WINDBOX P`,Train$`SO2 1 HR AVG`)
+abline(614,-19.92,col="red")
+plot(Train$`BURN RATE`,Train$`SO2 1 HR AVG`)
+plot(Train$`SULFIDITY`,Train$`SO2 1 HR AVG`)
+plot(Train$`BLK LIQ SOLID`,Train$`SO2 1 HR AVG`)
+plot(Train$`Flue Gas Oxygen`,Train$`SO2 1 HR AVG`)
+abline(614,-19.92,col="red")
+plot(Train$`TRSRAW 1 MIN AVG`,Train$`SO2 1 HR AVG`) #promising
+plot(Train$`BLK LIQ Density A`,Train$`SO2 1 HR AVG`)
+plot(Train$`BLK LIQ Density B`,Train$`SO2 1 HR AVG`)
+abline(lm(Train$`SO2 1 HR AVG`~Train$`BLK LIQ Density B`),col="red")
+plot(Train$`PRIMARY AIR TEMP`,Train$`SO2 1 HR AVG`) #promising
+plot(Train$`SECONDARY AIR TEMP`,Train$`SO2 1 HR AVG`) #promising
+plot(Train$`STEAM FLOW`,Train$`SO2 1 HR AVG`)
+plot(Train$`BLK LIQ SOLIDS FLOW`,Train$`SO2 1 HR AVG`)
+abline(lm(Train$`SO2 1 HR AVG`~Train$`BLK LIQ SOLIDS FLOW`),col="red")
+abline(model.MLR.3)
+plot(Train$`ST/DS Ratio`,Train$`SO2 1 HR AVG`) # Maybe
+```
+# Paired Scattar Plot
+```{r}
+pairs(~`Secondary Air Flow`+`Tertiary Air Flow`+`Tertiary Air Flow`+`TERTIARY WINDBOX P`+`BURN RATE`+`BLK LIQ Density B`+ `Flue Gas Oxygen`+`SECONDARY AIR TEMP` +`SO2 1 HR AVG`, data=Train)
+```
+
+## Linear Regression
+```{r}
+model.LM.SOLIDFLOW<-lm(`SO2 1 HR AVG`~ `BLK LIQ SOLIDS FLOW`, data=Train)
+summary(model.LM.SOLIDFLOW)
+plot(`BLK LIQ SOLIDS FLOW`,`SO2 1 HR AVG`)
+abline(lm(`SO2 1 HR AVG`~ `BLK LIQ SOLIDS FLOW`))
+```
+## Multilinear Regression
+
+```{r}
+model.MLR <- lm(`SO2 1 HR AVG`~., data=Train)
+summary(model.MLR)
+anova(model.MLR)
+
+
+resid.MLR <- resid(model.MLR)
+plot(Train$`SO2 1 HR AVG`[1:1470],resid.MLR, xlab="SO2 Emission (PPM)", ylab="Residual", col="red") 
+abline(0,0)
+
+stdres.MLR <- rstandard(model.MLR)
+qqnorm(stdres.MLR,ylab="Standardized Residuals", xlab="Normal Scores", col="red")
+qqline(stdres.MLR)
+
+
+
+
+
+
+```
+### How Significant is the model?
+
+The model that includes all variables explained 26 percents of variability in SO2 level. Since the more variables are included the higher the R2 value, the Adjusted R-squre values adjust for a large number of variable. 26 % may seems low, but for the variance the model was able to explain, it explain it significantly well. It explains better than using the averages alone. The chance that using the average of SO2 AVG alone is more accurate than the model is very low. 
+
+Since the model is significant we can ask the following question:
+
+### How significant is the parameters?
+#### ANOVA
+The ANOVA shows the regression with individual parameters, that is SO2~Tertiary Airflow etc and determine whether the linear model with one parameter is significant.
+
+![](linear-regression-22-638.jpg)
+
+#### t-test
+Are the parameters significantly different from 0? Why keep a parameter if its true weight is likly zero? The t-test compares the likelyhood that the weight of the parameter is zero in the MLR, that means the parameter is playing no role in the model.
+
+
+
+
+## Manual selection MLR
+Let's see if we can reduce the number of variables without sacrificing R2. Simplifying the model with only the highly significant terms using t-test with p-value > 0.01
+```{r}
+
+model.MLR.2 <-lm(`SO2 1 HR AVG`~`Secondary Air Flow`+`Tertiary Air Flow`+`TERTIARY WINDBOX P`+`BURN RATE`+SULFIDITY+`Flue Gas Oxygen`+`BLK LIQ SOLIDS FLOW`, data=Train)
+anova(model.MLR.2)
+summary(model.MLR.2)
+```
+This model explained 23% of the variability in SO2 1Hr Avg. with 8 terms. 
+
+We found that the slope of burn rate is not significantly different from zero, even though it explains large amount of variance.
+
+
+## Stepwise MLR
+Let's find all possible combination of variables and find the variables that maximize R2
+Leap is a package that aggressively find all the combination of variables
+
+```{r}
+library(leaps)
+attach(Train)
+leaps<-regsubsets(`SO2 1 HR AVG`~.,data=Train,nbest=5)
+plot(leaps,scale="r2")
+par(yaxp  = c(0, 0.25, 5))
+```
+
+```{r}
+## Try the third Model
+model.MLR.3 <-lm(`SO2 1 HR AVG`~`Secondary Air Flow`+`Tertiary Air Flow`+`TERTIARY WINDBOX P`+`BURN RATE`+`BLK LIQ Density B`+`Flue Gas Oxygen`+`SECONDARY AIR TEMP`+`BLK LIQ SOLIDS FLOW`, data=Train)
+anova(model.MLR.3)
+summary(model.MLR.3)
+library(car)
+vif(model.MLR.3)
+resid.MLR.3 <- resid(model.MLR.3)
+plot(Train$`SO2 1 HR AVG`[0:1471],resid.MLR.3, xlab="SO2 Emission (PPM)", ylab="Residual", col="red") 
+abline(0,0)
+
+stdres.MLR.3 <- rstandard(model.MLR.3)
+qqnorm(stdres.MLR.3,ylab="Standardized Residuals", xlab="Normal Scores", col="red")
+qqline(stdres.MLR.3)
+```
+This is the best MLR model we can find because it maximized R2 and contain only 8 variables.
+
+## Comparing different Models
+```{r}
+anova(model.MLR,model.MLR.3)
+```
+
+
+
+## Plot scatter with color value
+```{r}
+rbPal<-colorRampPalette(c('gray','red'))
+
+SO2Col<-rbPal(10)[as.numeric(cut(Train$`SO2 1 HR AVG`,breaks = 10))]
+plot(Train$`Flue Gas Oxygen`,Train$`BLK LIQ SOLIDS FLOW`,col=SO2Col)
+plot(Train$`Flue Gas Oxygen`,Train$`BLK LIQ Density B`,col=SO2Col)
+plot(Train$`SECONDARY AIR TEMP`,Train$`BLK LIQ SOLIDS FLOW`,col=SO2Col)
+plot(Train$`BLK LIQ SOLIDS FLOW`,Train$`BLK LIQ Density B`,col=SO2Col)
+plot(Train$`Secondary Air Flow`,Train$`SECONDARY AIR TEMP`,col=SO2Col)
+
+```
+
+
+More likely to happen when bulk solid density B is low, bulk liquid solid flow is low, secondary air temperature is high (can see in a univariate color plot)
+
+```{r}
+plot(Train$`SECONDARY AIR TEMP`,Train$`SO2 1 HR AVG`,xlim=c(260,290))
+```
+Some highe emission points happens in secondary air temperature higher than 285. All high air temperature data points are high SO2 1HR Avg.
+
+```{r}
+model.MLR.4<-lm(`SO2 1 HR AVG`~`Secondary Air Flow`+`BLK LIQ Density B`+`SECONDARY AIR TEMP`+`BLK LIQ SOLIDS FLOW`, data=Train)
+anova(model.MLR.4)
+summary(model.MLR.4)
+```
+Catagorizing the SO2 data
+```{r}
+Train$SO2Cat <- cut(Train$`SO2 1 HR AVG`, c(0,150,600), labels=c("low","High"))
+model.MLR.cat <- aov(Train$`Secondary Air Flow`~Train$SO2Cat)
+boxplot(Train$`Secondary Air Flow`~Train$SO2Cat)
+boxplot(Train$`BLK LIQ Density B`~Train$SO2Cat)
+aov(Train$`BLK LIQ Density B`~ Train$SO2Cat)
+aggregate(`BLK LIQ Density B` ~ SO2Cat, data=Train, mean)
+aggregate(`BLK LIQ SOLIDS FLOW` ~ SO2Cat, data=Train, mean) # Promising
+```
+
+### Evaluation
+```{r}
+pred.MLR<- predict(model.MLR,newdata= Test)
+plot(Test$`SO2 1 HR AVG`,col="red")
+points(pred.MLR)
+ehat.MLR<-pred.MLR-Test$`SO2 1 HR AVG`
+RMSE.MLR<-sqrt(mean(ehat.MLR^2, na.rm=TRUE))
+RMSE.MLR
+```
+
+```{r}
+pred.MLR.2<- predict(model.MLR.2,newdata= Test)
+plot(Test$`SO2 1 HR AVG`,col="red")
+points(pred.MLR.2)
+ehat.MLR.2<-pred.MLR.2-Test$`SO2 1 HR AVG`
+RMSE.MLR.2<-sqrt(mean(ehat.MLR.2^2, na.rm=TRUE))
+RMSE.MLR.2
+```
+
+```{r}
+pred.MLR.3<- predict(model.MLR.3,newdata= Test)
+plot(Test$`SO2 1 HR AVG`,Test$`Flue Gas Oxygen`,col="red", main="Model Prediction vs Test data for Model 3")
+points(pred.MLR.3,Test$`Flue Gas Oxygen`)
+legend(300,10,legend =c("Data","Prediction"),col=c("red","black"),lty=1:2,cex=0.8)
+ehat.MLR.3<-pred.MLR.3-Test$`SO2 1 HR AVG`
+SD.ehat.MLR.3<-sqrt(var(ehat.MLR.3,na.rm = TRUE))
+Standardehat.MLR.3<-ehat.MLR.3/SD.ehat.MLR.3
+plot(Standardehat.MLR.3,main="Standardized Residual Plot for Model 3")
+RMSE.MLR.3<-sqrt(mean(ehat.MLR.3^2, na.rm=TRUE))
+RMSE.MLR.3
+```
+```{r}
+cor(Train$`Flue Gas Oxygen`,Train$`SO2 1 HR AVG`, use="complete.obs")
+cor(Train$`BLK LIQ Density B`,Train$`SO2 1 HR AVG`, use="complete.obs")
+cor(Train$`TERTIARY WINDBOX P`,Train$`SO2 1 HR AVG`, use="complete.obs")
+cor(Train$`BLK LIQ SOLIDS FLOW`,Train$`SO2 1 HR AVG`, use="complete.obs")
+```
+
+
+# Decision Tree
+```{r}
+library(rpart)
+library(rpart.plot)
+model.Dtree.Reg<-rpart(`SO2 1 HR AVG` ~., data = Train, method = "anova")
+prp(model.Dtree.Reg)
+
+#Residual Plot
+res.Dtree.Reg = resid(model.Dtree.Reg)
+plot(Train$`SO2 1 HR AVG`,res.Dtree.Reg, ylab="Residual", xlab="SO2 Emission", main="Residual Plot",col="red")
+abline(0,0)
+
+#QQ Plot
+stdres.Dtree.Reg <- scale(res.Dtree.Reg )
+qqnorm(stdres.Dtree.Reg,ylab="Standardized Residuals", xlab="Normal Scores", col="red")
+qqline(stdres.Dtree.Reg)
+```
+
+#Evaluation of Decision Tree
+```{r}
+pred.Dtree.Reg <- predict(model.Dtree.Reg, newdata=Test)
+err.Dtree.Reg <- Test$`SO2 1 HR AVG`- pred.Dtree.Reg
+rmse.Dtree.Reg <- sqrt(mean(err.Dtree.Reg^2))
+rmse.Dtree.Reg
+```
+
+# Binning
+```{r}
+Train$SO2Cat <- cut(Train$`SO2 1 HR AVG`,c(min(Train$`SO2 1 HR AVG`),80,max(Train$`SO2 1 HR AVG`)))
+levels(Train$SO2Cat)<-c("Low & medium","High")
+
+# for Test set
+Test$SO2Cat <- cut(Test$`SO2 1 HR AVG`,c(min(Train$`SO2 1 HR AVG`),80,max(Train$`SO2 1 HR AVG`)))
+levels(Test$SO2Cat)<-c("Low & medium","High")
+```
+
+# Decision Tree - Category
+```{r}
+library(caret)
+library(AUC)
+library(rpart)
+library(rpart.plot)
+
+model.Dtree.Cat<-rpart(Train$SO2Cat ~. -`SO2 1 HR AVG` , data = Train, method = "class")
+prp(model.Dtree.Cat)
+
+#Lift chart
+pb<-NULL
+pb <- as.data.frame(predict(model.Dtree.Cat, Test))
+pred.Dtree.Cat <- data.frame(Test$SO2Cat, pb$High)
+colnames(pred.Dtree.Cat) <- c("target","score")
+lift.Dtree <- lift(target ~ score, data = pred.Dtree.Cat, cuts=10, class="High")
+xyplot(lift.Dtree, main="Decision Tree - Lift Chart", type=c("l","g"), lwd=2
+       , scales=list(x=list(alternating=FALSE,tick.number = 10)
+                     ,y=list(alternating=FALSE,tick.number = 10)))
+
+
+
+```
+
+# Confusion Matrix
+```{r}
+#confusion matrix
+pc <- NULL
+pc <- ifelse(pb$`Low & medium` > pb$High, "Low & medium","High")
+summary(as.data.frame(pc))
+l <- union(pc,Test$SO2Cat)
+xtab <- table(factor(pc,l), factor(Test$SO2Cat,l))
+caret::confusionMatrix(xtab, positive = "High")
+
+```
+```{r}
+#roc chart
+labels <- as.factor(ifelse(pred.Dtree.Cat$target=="High", 1, 0))
+predictions <- pred.Dtree.Cat$score
+auc(roc(predictions, labels), min = 0, max = 1)
+plot(roc(predictions, labels), min=0, max=1, type="l", main="Decision Tree - ROC Chart")
+```
+
+
+# KNN Regression
+
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
